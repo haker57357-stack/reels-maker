@@ -1,0 +1,389 @@
+name: 🎬 صانع الريلز (سحابي)
+run-name: reels ${{ inputs.job }}
+
+# الشغل كله بيتم على سيرفرات GitHub المجانية — موبايلك بس بيبعت الرابط وينزّل الـ zip.
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "رقم العملية (بيتملي أوتوماتيك من التطبيق — سيبه فاضي لو بتشغّل بإيدك)"
+        required: false
+        default: ""
+      url:
+        description: "🔗 رابط الفيديو (الصقه هنا)"
+        required: true
+      rights:
+        description: "✅ أؤكد أني أملك حقوق الفيديو أو مصرّح لي"
+        type: boolean
+        default: false
+      n:
+        description: "عدد الريلز"
+        default: "5"
+      min_l:
+        description: "أقل مدة للريل (ثواني)"
+        default: "15"
+      max_l:
+        description: "أقصى مدة للريل (ثواني)"
+        default: "25"
+      res:
+        description: "الجودة"
+        type: choice
+        options: ["1080", "720"]
+        default: "1080"
+      reverse:
+        description: "عكس الفيديو (Mirror)"
+        type: boolean
+        default: false
+      text:
+        description: "النص (سطر واحد)"
+        default: "لمشاهدة وتحميل كاملا الرابط في البايو الملف الشخصي"
+      music:
+        description: "موسيقى هادئة في الخلفية"
+        type: boolean
+        default: false
+      mvol:
+        description: "مستوى الموسيقى (8 قياسي • 15 وسط • 25 عالي)"
+        default: "8"
+      music_url:
+        description: "رابط موسيقى بدل المدمجة (اختياري)"
+        default: ""
+      rsong:
+        description: "أغاني الفيديو الأساسية: لو الفيديو فيه أغنية تتبدّل بالموسيقى الأساسية"
+        type: boolean
+        default: true
+      react:
+        description: "وضع الريأكشن (تأثيرات تحرير خفيفة)"
+        type: boolean
+        default: false
+      tiktok:
+        description: "نشر على حسابات التك توك بعد الانتهاء (من السيرفر، عن طريق الـ API الرسمي)"
+        type: boolean
+        default: false
+      caption:
+        description: "وصف الفيديو على التك توك (اختياري)"
+        default: ""
+      accs:
+        description: "حسابات التك توك (توكنات مشفّرة، بيملاها التطبيق)"
+        default: "[]"
+      feat:
+        description: "الخصائص (crop,best,face,enhance,orig,denoise,fade,musicfile أو none)"
+        default: "crop,best,face,enhance,orig"
+      fb:
+        description: "نشر على صفحات الفيسبوك بعد الانتهاء (من السيرفر)"
+        type: boolean
+        default: false
+      fb_caption:
+        description: "وصف الريل على الفيسبوك (اختياري)"
+        default: ""
+      fb_accs:
+        description: "صفحات الفيسبوك (مشفّرة، بيملاها التطبيق)"
+        default: "[]"
+      ig:
+        description: "نشر على حسابات إنستجرام بعد الانتهاء (من السيرفر)"
+        type: boolean
+        default: false
+      ig_caption:
+        description: "وصف الريل على إنستجرام (اختياري)"
+        default: ""
+      ig_accs:
+        description: "حسابات إنستجرام (مشفّرة، بيملاها التطبيق)"
+        default: "[]"
+      adv:
+        description: "خصائص v5 (JSON بيملاه التطبيق): فلاتر • لوجو • نص • صوت • وضع جاهز • فيديو تجريبي • النشر على X"
+        default: "{}"
+
+permissions:
+  contents: write
+
+jobs:
+  make:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: تجهيز الإعدادات
+        id: cfg
+        env:
+          IN_URL: ${{ inputs.url }}
+          IN_RIGHTS: ${{ inputs.rights }}
+          IN_N: ${{ inputs.n }}
+          IN_MIN: ${{ inputs.min_l }}
+          IN_MAX: ${{ inputs.max_l }}
+          IN_RES: ${{ inputs.res }}
+          IN_REVERSE: ${{ inputs.reverse }}
+          IN_TEXT: ${{ inputs.text }}
+          IN_MUSIC: ${{ inputs.music }}
+          IN_MVOL: ${{ inputs.mvol }}
+          IN_MUSIC_URL: ${{ inputs.music_url }}
+          IN_RSONG: ${{ inputs.rsong }}
+          IN_REACT: ${{ inputs.react }}
+          IN_FEAT: ${{ inputs.feat }}
+          IN_ADV: ${{ inputs.adv }}
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: python3 cloud/make_settings.py
+
+      # نفس الرابط بنفس الإعدادات اتعمل قبل كده؟ نستخدم نتيجته فورًا (من غير تحميل ولا تصيير ولا تكرار)
+      - name: فحص التكرار
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HASH: ${{ steps.cfg.outputs.hash }}
+        run: |
+          hit=false
+          if [[ "$HASH" =~ ^[a-f0-9]{20}$ ]]; then
+            src=$(gh release view "h-$HASH" --json body --jq .body 2>/dev/null | tr -d '[:space:]' || true)
+            if [[ "$src" =~ ^reels-[A-Za-z0-9._-]+$ ]]; then
+              mkdir -p cached
+              if gh release download "$src" --dir cached --pattern 'reels.zip' --pattern 'reel_*.mp4' --pattern 'music.m4a' >/dev/null 2>&1 && [ -s cached/reels.zip ]; then
+                hit=true
+                echo "dir=$PWD/cached" >> "$GITHUB_OUTPUT"
+                echo "♻️ الرابط ده اتعمل قبل كده بنفس الإعدادات — هنستخدم نتيجته." 
+              fi
+            fi
+          fi
+          echo "hit=$hit" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        if: steps.reuse.outputs.hit != 'true'
+        with:
+          python-version: "3.12"
+
+      - name: تجهيز الأدوات (FFmpeg + yt-dlp)
+        if: steps.reuse.outputs.hit != 'true'
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! dpkg -s libraqm0 >/dev/null 2>&1; then
+            sudo apt-get update -y -qq && sudo apt-get install -y -qq ffmpeg libraqm0 fonts-dejavu-core
+          fi
+          python -m pip install -q --disable-pip-version-check --prefer-binary "yt-dlp[default,curl-cffi]" requests six fonttools arabic-reshaper "python-bidi==0.4.2" pillow numpy
+          # OpenCV (لتتبّع الوجوه) بيتثبّت بس لو الخاصية متعلّم عليها
+          if grep -Eq '"feat": *"[^"]*face|"mode": *"(best|pro)"' settings.json; then
+            python -m pip install -q --disable-pip-version-check --prefer-binary opencv-python-headless || echo "::warning::OpenCV ماتثبّتش — تتبّع الوجوه هيتعطّل"
+          fi
+
+      - name: صنع الريلز
+        id: run
+        if: steps.reuse.outputs.hit != 'true'
+        shell: bash
+        run: |
+          python engine.py --run settings.json | tee run.log
+          d=$(grep '^RESULT_DIR=' run.log | tail -1 | cut -d= -f2-)
+          echo "dir=$d" >> "$GITHUB_OUTPUT"
+        env:
+          REELS_HEADLESS: "1"
+
+      - name: تسجيل سبب الفشل (بيظهر في التطبيق)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB: ${{ inputs.job }}
+        run: |
+          [[ "$JOB" =~ ^[a-z0-9]{6,32}$ ]] || exit 0
+          clean() { sed -E 's#\[(info|err|warn)\]##g; s#https?://[^ ]+#<رابط>#g'; }
+          tech=$(grep -A4 'تفاصيل تقنية' run.log 2>/dev/null | clean | tr '\n' ' ' | cut -c1-420)
+          hints=$(grep '•' run.log 2>/dev/null | clean | head -n 3 | cut -c1-160)
+          msg=$(printf '%s\n%s' "$tech" "$hints")
+          [ -n "$tech" ] || msg=$(grep -v '^RESULT_DIR' run.log 2>/dev/null | grep -v '^\s*$' | tail -n 8 | cut -c1-250 | clean)
+          [ -n "$msg" ] || msg="فشل غير معروف — جرّب رابط تاني"
+          gh release create "err-$JOB" --title "err" --notes "$msg" || true
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | grep '^err-' | tail -n +21 | \
+            while read -r t; do gh release delete "$t" --cleanup-tag -y || true; done
+
+      - name: نشر الملفات (رابط عام للتحميل)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIR: ${{ steps.reuse.outputs.hit == 'true' && steps.reuse.outputs.dir || steps.run.outputs.dir }}
+          HIT: ${{ steps.reuse.outputs.hit }}
+          HASH: ${{ steps.cfg.outputs.hash }}
+          JOB: ${{ inputs.job }}
+        run: |
+          if [[ "$JOB" =~ ^[a-z0-9]{6,32}$ ]]; then tag="reels-$JOB"; else tag="reels-${{ github.run_id }}"; fi
+          files=("$DIR"/reels.zip "$DIR"/reel_*.mp4)
+          [ -f "$DIR/music.m4a" ] && files+=("$DIR/music.m4a")
+          gh release create "$tag" "${files[@]}" \
+            --title "🎬 ريلز $(date -u +%Y-%m-%d_%H:%M)" \
+            --notes "نزّل **reels.zip** (كل الريلز في ملف واحد) أو كل ريل لوحده."
+          # بصمة الطلب → الإصدار اللي فيه نتيجته (للتعرف على التكرار)
+          if [ "$HIT" != "true" ] && [[ "$HASH" =~ ^[a-f0-9]{20}$ ]]; then
+            gh release delete "h-$HASH" --cleanup-tag -y >/dev/null 2>&1 || true
+            gh release create "h-$HASH" --title "idx" --notes "$tag" >/dev/null 2>&1 || true
+            gh release list --limit 200 --json tagName --jq '.[].tagName' | grep '^h-' | tail -n +101 | \
+              while read -r t; do gh release delete "$t" --cleanup-tag -y || true; done
+          fi
+          url="https://github.com/${{ github.repository }}/releases/download/$tag/reels.zip"
+          {
+            echo "## ✅ خلصنا"
+            echo "⬇️ **[تحميل reels.zip]($url)**"
+            echo
+            echo "كل الريلز لوحدها: https://github.com/${{ github.repository }}/releases/tag/$tag"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # امسح الإصدارات القديمة (احتفظ بآخر 60)
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | grep '^reels-' | tail -n +61 | \
+            while read -r t; do gh release delete "$t" --cleanup-tag -y || true; done
+
+      # ───────── النشر على التك توك من السيرفر (الفيديو مابيعدّيش على موبايلك) ─────────
+      - uses: actions/setup-python@v5
+        if: inputs.tiktok == true
+        with:
+          python-version: "3.12"
+
+      - name: نشر على التك توك (حسابات التوكن — API الرسمي)
+        id: tt
+        if: inputs.tiktok == true
+        continue-on-error: true
+        timeout-minutes: 30
+        env:
+          TT_ACCS: ${{ inputs.accs }}
+          TT_PRIV: ${{ secrets.TT_PRIV }}
+          TT_CAPTION: ${{ inputs.caption }}
+          TT_DIR: ${{ steps.reuse.outputs.hit == 'true' && steps.reuse.outputs.dir || steps.run.outputs.dir }}
+          TT_RESULT: tt_result_api.txt
+        run: |
+          python -m pip install -q --disable-pip-version-check requests cryptography
+          if grep -q '"t": *"api"' <<< "$TT_ACCS"; then python cloud/tiktok_api.py; else echo "مفيش حسابات توكن"; fi
+
+      # الجلسة بتتحفظ بين التشغيلات (كاش المستودع الخاص) فالتك توك يشوف نفس الجلسة كل مرة
+      - name: استرجاع جلسة التك توك المحفوظة
+        if: inputs.tiktok == true
+        uses: actions/cache/restore@v4
+        with:
+          path: tt_state.enc
+          key: tt-state-${{ github.run_id }}
+          restore-keys: tt-state-
+
+      - name: نشر على التك توك (حسابات الكوكيز)
+        id: ttck
+        if: inputs.tiktok == true
+        continue-on-error: true
+        timeout-minutes: 40
+        env:
+          TT_ACCS: ${{ inputs.accs }}
+          TT_PRIV: ${{ secrets.TT_PRIV }}
+          TT_CAPTION: ${{ inputs.caption }}
+          TT_DIR: ${{ steps.reuse.outputs.hit == 'true' && steps.reuse.outputs.dir || steps.run.outputs.dir }}
+          TT_RESULT: tt_result_ck.txt
+        run: |
+          if grep -q '"t": *"ck"' <<< "$TT_ACCS"; then
+            python -m pip install -q --disable-pip-version-check requests cryptography playwright
+            python -m playwright install --with-deps chromium
+            python cloud/tiktok_post.py
+          else
+            echo "مفيش حسابات كوكيز"
+          fi
+
+      - name: حفظ جلسة التك توك
+        if: always() && inputs.tiktok == true && hashFiles('tt_state.enc') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: tt_state.enc
+          key: tt-state-${{ github.run_id }}
+
+      - name: تقرير النشر (بيظهر في التطبيق)
+        if: always() && inputs.tiktok == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB: ${{ inputs.job }}
+        run: |
+          [[ "$JOB" =~ ^[a-z0-9]{6,32}$ ]] || exit 0
+          msg=$(cat tt_result_api.txt tt_result_ck.txt 2>/dev/null || true)
+          [ -n "$msg" ] || msg="النشر على التك توك ماتمش (راجع سجل التشغيل)"
+          gh release create "tt-$JOB" --title "tt" --notes "$msg" || true
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | grep '^tt-' | tail -n +21 | \
+            while read -r t; do gh release delete "$t" --cleanup-tag -y || true; done
+
+      # ───────── النشر على صفحات الفيسبوك من السيرفر (Graph API الرسمي) ─────────
+      - uses: actions/setup-python@v5
+        if: inputs.fb == true
+        with:
+          python-version: "3.12"
+
+      - name: نشر على صفحات الفيسبوك
+        id: fb
+        if: inputs.fb == true
+        continue-on-error: true
+        timeout-minutes: 30
+        env:
+          FB_ACCS: ${{ inputs.fb_accs }}
+          TT_PRIV: ${{ secrets.TT_PRIV }}
+          FB_CAPTION: ${{ inputs.fb_caption }}
+          FB_DIR: ${{ steps.reuse.outputs.hit == 'true' && steps.reuse.outputs.dir || steps.run.outputs.dir }}
+        run: |
+          python -m pip install -q --disable-pip-version-check requests cryptography
+          python cloud/facebook_post.py
+
+      - name: تقرير فيسبوك (بيظهر في التطبيق)
+        if: always() && inputs.fb == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB: ${{ inputs.job }}
+        run: |
+          [[ "$JOB" =~ ^[a-z0-9]{6,32}$ ]] || exit 0
+          msg=$(cat fb_result.txt 2>/dev/null || echo "النشر على فيسبوك ماتمش (راجع سجل التشغيل)")
+          gh release create "fb-$JOB" --title "fb" --notes "$msg" || true
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | grep '^fb-' | tail -n +21 | \
+            while read -r t; do gh release delete "$t" --cleanup-tag -y || true; done
+
+      # ───────── النشر على حسابات إنستجرام من السيرفر (Instagram Content Publishing API الرسمي) ─────────
+      - uses: actions/setup-python@v5
+        if: inputs.ig == true
+        with:
+          python-version: "3.12"
+
+      - name: نشر على إنستجرام
+        id: ig
+        if: inputs.ig == true
+        continue-on-error: true
+        timeout-minutes: 40
+        env:
+          IG_ACCS: ${{ inputs.ig_accs }}
+          TT_PRIV: ${{ secrets.TT_PRIV }}
+          IG_CAPTION: ${{ inputs.ig_caption }}
+          IG_DIR: ${{ steps.reuse.outputs.hit == 'true' && steps.reuse.outputs.dir || steps.run.outputs.dir }}
+        run: |
+          python -m pip install -q --disable-pip-version-check requests cryptography
+          python cloud/instagram_post.py
+
+      - name: تقرير إنستجرام (بيظهر في التطبيق)
+        if: always() && inputs.ig == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB: ${{ inputs.job }}
+        run: |
+          [[ "$JOB" =~ ^[a-z0-9]{6,32}$ ]] || exit 0
+          msg=$(cat ig_result.txt 2>/dev/null || echo "النشر على إنستجرام ماتمش (راجع سجل التشغيل)")
+          gh release create "ig-$JOB" --title "ig" --notes "$msg" || true
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | grep '^ig-' | tail -n +21 | \
+            while read -r t; do gh release delete "$t" --cleanup-tag -y || true; done
+
+      # ───────── النشر على X (تويتر سابقًا) من السيرفر (X API v2 الرسمي) ─────────
+      - uses: actions/setup-python@v5
+        if: fromJSON(inputs.adv).x_on == true && fromJSON(inputs.adv).demo != true
+        with:
+          python-version: "3.12"
+
+      - name: نشر على X
+        id: xp
+        if: fromJSON(inputs.adv).x_on == true && fromJSON(inputs.adv).demo != true
+        continue-on-error: true
+        timeout-minutes: 40
+        env:
+          X_ACCS: ${{ fromJSON(inputs.adv).x_accs }}
+          TT_PRIV: ${{ secrets.TT_PRIV }}
+          X_CAPTION: ${{ fromJSON(inputs.adv).x_caption }}
+          X_DIR: ${{ steps.reuse.outputs.hit == 'true' && steps.reuse.outputs.dir || steps.run.outputs.dir }}
+        run: |
+          python -m pip install -q --disable-pip-version-check requests cryptography
+          python cloud/x_post.py
+
+      - name: تقرير X (بيظهر في التطبيق)
+        if: always() && fromJSON(inputs.adv).x_on == true && fromJSON(inputs.adv).demo != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB: ${{ inputs.job }}
+        run: |
+          [[ "$JOB" =~ ^[a-z0-9]{6,32}$ ]] || exit 0
+          msg=$(cat x_result.txt 2>/dev/null || echo "النشر على X ماتمش (راجع سجل التشغيل)")
+          gh release create "x-$JOB" --title "x" --notes "$msg" || true
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | grep '^x-' | tail -n +21 | \
+            while read -r t; do gh release delete "$t" --cleanup-tag -y || true; done
