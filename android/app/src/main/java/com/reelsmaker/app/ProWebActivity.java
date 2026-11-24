@@ -44,6 +44,8 @@ public class ProWebActivity extends Activity {
     TextView title;
     String mobileUa;
     boolean desktop = true;
+    static final int[] VW = {0, 1100, 1400, 1800};
+    int vwIdx = 2;   // 1400: يجبر المواقع على تخطيط الكمبيوتر الحقيقي (إنستجرام بيعرض شكل الموبايل لو العرض أقل من ~1000)
     ValueCallback<Uri[]> fileCb;
 
     @Override protected void onCreate(Bundle b) {
@@ -85,6 +87,17 @@ public class ProWebActivity extends Activity {
             applyUa();
             web.reload();
         });
+        final Button zm = ProKit.soft(this, "🔍");
+        zm.setOnClickListener(v -> {
+            vwIdx = (vwIdx + 1) % VW.length;
+            if (VW[vwIdx] == 0) {
+                ProKit.toast(this, "عرض الصفحة: الأصلي");
+                web.reload();
+            } else {
+                ProKit.toast(this, "عرض الصفحة: " + VW[vwIdx] + " (اضغط تاني لتصغير أكتر)");
+                applyViewport();
+            }
+        });
         Button ext = ProKit.soft(this, "🌐");
         ext.setOnClickListener(v -> {
             try {
@@ -92,6 +105,7 @@ public class ProWebActivity extends Activity {
             } catch (Throwable ignored) { }
         });
         top.addView(up, ProKit.lp(this, -2, -2, 0, 2, 0));
+        top.addView(zm, ProKit.lp(this, -2, -2, 0, 2, 0));
         top.addView(dk, ProKit.lp(this, -2, -2, 0, 2, 0));
         top.addView(ext, ProKit.lp(this, -2, -2, 0, 2, 0));
         root.addView(top);
@@ -217,6 +231,13 @@ public class ProWebActivity extends Activity {
         return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + v + " Safari/537.36";
     }
 
+    /** بيوسّع عرض الصفحة المنطقي عشان نوافذ الموقع الكبيرة (زي تعديل الريل) تظهر كاملة بزرارها على الشاشة الصغيرة. */
+    void applyViewport() {
+        if (!desktop || vwIdx <= 0 || VW[vwIdx] == 0 || web == null) return;
+        String js = "(function(){var m=document.querySelector('meta[name=viewport]');if(!m){m=document.createElement('meta');m.name='viewport';document.head.appendChild(m);}m.content='width=" + VW[vwIdx] + "';})();";
+        web.evaluateJavascript(js, null);
+    }
+
     void applyUa() {
         WebSettings s = web.getSettings();
         s.setUserAgentString(desktop ? desktopUa() : mobileUa);
@@ -248,6 +269,8 @@ public class ProWebActivity extends Activity {
 
             @Override public void onPageFinished(WebView v, String u) {
                 bar.setVisibility(View.GONE);
+                applyViewport();
+                v.postDelayed(() -> applyViewport(), 1200);
                 snapshot();
             }
         });
