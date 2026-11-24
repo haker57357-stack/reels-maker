@@ -39,14 +39,18 @@ jobs:
           o = os.environ["GITHUB_OUTPUT"]
           with open(o, "a") as f:
               f.write("cap=%s\n" % str(bool(c.get("cap") or c.get("cut") == "sentence")).lower())
-              f.write("track=%s\n" % str(bool(c.get("track"))).lower())
-              f.write("tr=%s\n" % str(bool(c.get("cap") and c.get("cap_tr", "none") != "none")).lower())
+              f.write("track=%s\n" % str(bool(c.get("track", True))).lower())
+              f.write("tr=%s\n" % str(bool(c.get("cap") and c.get("cap_tr", "ar") != "none")).lower())
+              f.write("ocr=%s\n" % str(bool(c.get("cap") and c.get("desub", True) and not c.get("preview"))).lower())
           PY
 
       - name: تجهيز الأدوات (FFmpeg + الخطوط)
         run: |
           if ! command -v ffmpeg >/dev/null || ! dpkg -s libraqm0 >/dev/null 2>&1; then
             sudo apt-get update -y -qq && sudo apt-get install -y -qq ffmpeg libraqm0 fonts-dejavu-core
+          fi
+          if [ "${{ steps.cfg.outputs.ocr }}" = "true" ] && ! command -v tesseract >/dev/null; then
+            sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-eng tesseract-ocr-ara || echo "::warning::tesseract ماتثبّتش — كشف الترجمة المطبوعة هيتعطّل"
           fi
           python -m pip install -q --disable-pip-version-check --prefer-binary "yt-dlp[default,curl-cffi]" requests six fonttools arabic-reshaper "python-bidi==0.4.2" pillow numpy
           if [ "${{ steps.cfg.outputs.track }}" = "true" ]; then
@@ -58,6 +62,23 @@ jobs:
           if [ "${{ steps.cfg.outputs.tr }}" = "true" ]; then
             python -m pip install -q --disable-pip-version-check --prefer-binary deep-translator || echo "::warning::deep-translator ماتثبّتش"
           fi
+
+      - name: خطوط عربية جميلة (Tajawal / Almarai)
+        run: |
+          mkdir -p fonts
+          for u in "tajawal/Tajawal-Bold.ttf" "almarai/Almarai-Bold.ttf"; do
+            f=$(basename "$u")
+            curl -fsSL --retry 3 --max-time 60 -o "fonts/$f" "https://raw.githubusercontent.com/google/fonts/main/ofl/$u" || true
+            if [ ! -s "fonts/$f" ] || [ "$(stat -c%s "fonts/$f")" -lt 20000 ]; then rm -f "fonts/$f"; echo "::warning::الخط $f ماتحمّلش — هستخدم DejaVu"; fi
+          done
+          ls fonts
+
+      - name: كاش موديل الترجمة التلقائية
+        if: steps.cfg.outputs.cap == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-faster-whisper-v1
 
       - name: صنع الريلز (ميديا برو)
         env:

@@ -107,7 +107,7 @@ final class ProKit {
         put(o, "preview", false);
         put(o, "saver", false);
         put(o, "shortest", true);
-        put(o, "cut", "len");
+        put(o, "cut", "auto");
         put(o, "n", 5);
         put(o, "min", 15);
         put(o, "max", 25);
@@ -116,8 +116,8 @@ final class ProKit {
         put(o, "overlap", 0);
         put(o, "ratio", "9:16");
         put(o, "res", "1080");
-        put(o, "fill", "auto");
-        put(o, "track", false);
+        put(o, "fill", "crop");
+        put(o, "track", true);
         put(o, "stab", false);
         put(o, "clean", false);
         put(o, "norm", false);
@@ -136,7 +136,8 @@ final class ProKit {
         put(o, "cap", false);
         put(o, "cap_style", "plain");
         put(o, "cap_lang", "auto");
-        put(o, "cap_tr", "none");
+        put(o, "cap_tr", "ar");
+        put(o, "desub", true);
         put(o, "wm", false);
         put(o, "wm_text", "");
         put(o, "wm_style", "plain");
@@ -163,7 +164,23 @@ final class ProKit {
     }
 
     static JSONObject cfg(Context c) {
-        return merge(obj(c, "cfg"));
+        JSONObject o = merge(obj(c, "cfg"));
+        // ترحيل مرة واحدة: الإعدادات المحفوظة قبل النسخة دي كان فيها «بالطول» — نرجّعها «تلقائي»
+        if (!sp(c).getBoolean("mig_auto", false)) {
+            put(o, "cut", "auto");
+            saveObj(c, "cfg", o);
+            sp(c).edit().putBoolean("mig_auto", true).apply();
+        }
+        // ترحيل ثاني: قص عمودي بتتبّع + ترجمة للعربي + شيل الترجمة المطبوعة
+        if (!sp(c).getBoolean("mig_vert", false)) {
+            put(o, "fill", "crop");
+            put(o, "track", true);
+            put(o, "cap_tr", "ar");
+            put(o, "desub", true);
+            saveObj(c, "cfg", o);
+            sp(c).edit().putBoolean("mig_vert", true).apply();
+        }
+        return o;
     }
 
     static void saveCfg(Context c, JSONObject o) {

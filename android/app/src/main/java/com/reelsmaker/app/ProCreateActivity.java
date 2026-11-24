@@ -212,9 +212,9 @@ public class ProCreateActivity extends Activity {
         // القص
         LinearLayout cut = ProKit.card(this);
         cut.addView(ProKit.text(this, "✂️ طريقة القص", 14.5f, ProKit.TXT, true));
-        cut.addView(ProKit.cap(this, "بالطول هو الأساسي. الباقي بدايل تختار منها."));
-        cut.addView(chips(new String[]{"بالطول", "بالمشهد", "بالجمل", "بالصمت", "أفضل اللحظات", "أجزاء", "تقسيم متساوي"},
-                new String[]{"len", "scene", "sentence", "silence", "best", "series", "equal"}, "cut", this::rebuildParams));
+        cut.addView(ProKit.cap(this, "التلقائي هو الأساسي: بيوزّع الريلز على الفيديو كله ويختار اللقطات الأقوى. الباقي بدايل."));
+        cut.addView(chips(new String[]{"تلقائي (الأنسب)", "بالطول", "بالمشهد", "بالجمل", "بالصمت", "أفضل اللحظات", "أجزاء", "تقسيم متساوي"},
+                new String[]{"auto", "len", "scene", "sentence", "silence", "best", "series", "equal"}, "cut", this::rebuildParams));
         paramBox = new LinearLayout(this);
         paramBox.setOrientation(LinearLayout.VERTICAL);
         cut.addView(paramBox);
@@ -229,8 +229,9 @@ public class ProCreateActivity extends Activity {
         fmt.addView(ProKit.cap(this, "الجودة"));
         fmt.addView(chips(new String[]{"1080 عالية", "720 أسرع"}, new String[]{"1080", "720"}, "res", null));
         fmt.addView(ProKit.cap(this, "ملء الشاشة"));
-        fmt.addView(chips(new String[]{"تلقائي", "خلفية مغبشة", "قص", "أشرطة"}, new String[]{"auto", "blur", "crop", "bars"}, "fill", null));
-        fmt.addView(sw("🎯", "تتبّع الوش", "يحافظ على الوش في الكادر عند القص (أبطأ شوية)", "track"));
+        fmt.addView(chips(new String[]{"قص عمودي ذكي (الأنسب)", "خلفية مغبشة", "أشرطة"}, new String[]{"crop", "blur", "bars"}, "fill", null));
+        fmt.addView(ProKit.cap(this, "القص العمودي بيملا الشاشة بالطول (زي الريلز) وبياخد الجزء المهم من اللقطة."));
+        fmt.addView(sw("🎯", "تتبّع الهدف تلقائيًا", "يمشي ورا الوش أو الحركة عشان الأهم يفضل في الكادر", "track"));
         fmt.addView(sw("🎥", "تثبيت الصورة", "يقلل رعشة الكاميرا (أبطأ شوية)", "stab"));
         fmt.addView(sw("↔️", "مرآة (عكس الفيديو)", null, "rev"));
         fmt.addView(ProKit.cap(this, "السرعة"));
@@ -269,12 +270,13 @@ public class ProCreateActivity extends Activity {
                 chips(new String[]{"بسيط (نص فقط)", "صندوق", "نيون", "ذهبي"}, new String[]{"plain", "box", "neon", "gold"}, "text_style", null)), gap());
 
         // ترجمة / كلام
-        col.addView(ProKit.feature(this, cfg, "💬", "ترجمة وتعليق تلقائي", "بيكتب الكلام المنطوق على الفيديو (وقت أطول على السيرفر)", "cap",
+        col.addView(ProKit.feature(this, cfg, "💬", "ترجمة وتعليق تلقائي", "بيكتب الكلام على الفيديو بخط عربي جميل، والإنجليزي بيترجمه عربي (وقت أطول على السيرفر)", "cap",
                 chips(new String[]{"بسيط (نص فقط)", "كلمة بكلمة", "صندوق", "نيون"}, new String[]{"plain", "word", "box", "neon"}, "cap_style", null),
                 ProKit.cap(this, "لغة الكلام"),
                 chips(new String[]{"تلقائي", "عربي", "إنجليزي"}, new String[]{"auto", "ar", "en"}, "cap_lang", null),
                 ProKit.cap(this, "ترجمة إلى"),
-                chips(new String[]{"من غير ترجمة", "عربي", "إنجليزي"}, new String[]{"none", "ar", "en"}, "cap_tr", null)), gap());
+                chips(new String[]{"من غير ترجمة", "عربي (الأنسب)", "إنجليزي"}, new String[]{"none", "ar", "en"}, "cap_tr", null),
+                sw("✂️", "شيل الترجمة المطبوعة على الفيديو", "لو الفيديو عليه ترجمة مكتوبة بيشيلها لوحده قبل ما يحط الجديدة", "desub")), gap());
 
         // علامة مائية
         EditText wm = ProKit.input(this, "@اسمك أو اسم القناة", cfg.optString("wm_text"), InputType.TYPE_CLASS_TEXT, true);
@@ -369,7 +371,9 @@ public class ProCreateActivity extends Activity {
         }
         paramBox.addView(r, ProKit.lp(this, -1, -2, 0, 0, 6));
         String hint = "";
-        if ("scene".equals(cut)) hint = "بيقص عند تغيّر اللقطة.";
+        if ("auto".equals(cut)) hint = "بيقسّم الفيديو كله لريلز بين أقل وأقصى مدة، ويختار الأقوى (زي الأساسي).";
+        else if ("len".equals(cut)) hint = "ريلز ورا بعض بطول ثابت من أول الفيديو.";
+        else if ("scene".equals(cut)) hint = "بيقص عند تغيّر اللقطة.";
         else if ("sentence".equals(cut)) hint = "بيقص عند نهاية الجملة المنطوقة (بيستخدم التفريغ الصوتي).";
         else if ("silence".equals(cut)) hint = "بيقص عند وقفات الكلام.";
         else if ("best".equals(cut)) hint = "بيختار اللقطات الأقوى (حركة وصوت).";

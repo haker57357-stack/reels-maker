@@ -137,7 +137,19 @@ def silence_points(src, dur):
     return [(a + b) / 2 for a, b in sil]
 
 
-_WHISPER = {"m": None, "bad": False}
+_WHISPER = {"m": None, "bad": False, "err": ""}
+
+
+def load_whisper():
+    from faster_whisper import WhisperModel
+    last = None
+    for name in ("small", "base", "tiny"):
+        try:
+            return WhisperModel(name, device="cpu", compute_type="int8", cpu_threads=max(2, os.cpu_count() or 2))
+        except Exception as e:  # الموديل ماتحمّلش: نجرّب الأصغر
+            last = e
+            say(f"موديل {name} مااشتغلش: {str(e)[:160]}")
+    raise last
 
 
 def transcribe(path, lang):
@@ -146,32 +158,224 @@ def transcribe(path, lang):
         return None
     try:
         if _WHISPER["m"] is None:
-            from faster_whisper import WhisperModel
-            _WHISPER["m"] = WhisperModel("small", device="cpu", compute_type="int8")
-        segs, info = _WHISPER["m"].transcribe(path, language=None if lang == "auto" else lang, word_timestamps=True,
-                                             vad_filter=True, beam_size=1)
-        words, sg = [], []
-        for s in segs:
-            sg.append((float(s.start), float(s.end), s.text.strip()))
-            for w in (s.words or []):
-                t = (w.word or "").strip()
-                if t:
-                    words.append((float(w.start), float(w.end), t))
-        return words, sg, getattr(info, "language", "") or ""
+            _WHISPER["m"] = load_whisper()
     except Exception as e:
         _WHISPER["bad"] = True
-        say("التفريغ الصوتي مش متاح: " + str(e)[:200])
+        _WHISPER["err"] = ("مكتبة التفريغ الصوتي مش متاحة" if isinstance(e, ImportError) else "موديل التفريغ الصوتي ماتحمّلش") + ": " + str(e)[:120]
+        say(_WHISPER["err"])
         return None
+    for vad in (True, False):
+        try:
+            kw = dict(language=None if lang == "auto" else lang, word_timestamps=True, beam_size=1,
+                      condition_on_previous_text=False, vad_filter=vad)
+            if vad:
+                kw["vad_parameters"] = dict(min_silence_duration_ms=400)
+            segs, info = _WHISPER["m"].transcribe(path, **kw)
+            words, sg = [], []
+            for s_ in segs:
+                txt = (s_.text or "").strip()
+                if not txt:
+                    continue
+                sg.append((float(s_.start), float(s_.end), txt))
+                for w in (s_.words or []):
+                    t = (w.word or "").strip()
+                    if t:
+                        words.append((float(w.start), float(w.end), t))
+            return words, sg, getattr(info, "language", "") or ""
+        except Exception as e:
+            _WHISPER["err"] = "التفريغ الصوتي فشل: " + str(e)[:120]
+            say(_WHISPER["err"])
+    return None
 
 
-def translate_segments(sg, target):
+def translate_texts(texts, target):
+    """ترجمة دفعة جمل. بيرجّع قايمة بنفس الطول أو None."""
     try:
         from deep_translator import GoogleTranslator
-        tr = GoogleTranslator(source="auto", target=target)
-        return [(a, b, tr.translate(t) or t) for a, b, t in sg]
     except Exception as e:
-        say("الترجمة مش متاحة: " + str(e)[:200])
+        say("deep-translator مش متاح: " + str(e)[:120])
         return None
+    for attempt in range(3):
+        try:
+            tr = GoogleTranslator(source="auto", target=target)
+            out = tr.translate_batch(list(texts))
+            if out and len(out) == len(texts) and all(isinstance(x, str) for x in out):
+                return [o if o.strip() else t for o, t in zip(out, texts)]
+        except Exception as e:
+            say(f"محاولة ترجمة {attempt + 1} فشلت: {str(e)[:140]}")
+        time.sleep(2 + attempt * 2)
+    # آخر محاولة: جملة جملة
+    try:
+        tr = GoogleTranslator(source="auto", target=target)
+        res = []
+        for t in texts:
+            res.append(tr.translate(t) or t)
+            time.sleep(0.3)
+        return res
+    except Exception as e:
+        say("الترجمة فشلت: " + str(e)[:140])
+        return None
+
+
+# ───────── الخط العربي ─────────
+def pick_font():
+    try:
+        files = [f.lower() for f in os.listdir(FONTS)]
+    except Exception:
+        files = []
+    for prefix, fam in (("tajawal", "Tajawal"), ("almarai", "Almarai"), ("cairo", "Cairo")):
+        if any(f.startswith(prefix) for f in files):
+            return fam
+    try:
+        out = subprocess.run(["fc-list", ":lang=ar", "family"], stdout=subprocess.PIPE, text=True).stdout
+        if "Noto Sans Arabic" in out:
+            return "Noto Sans Arabic"
+    except Exception:
+        pass
+    return "DejaVu Sans"
+
+
+# ───────── تتبّع الحركة (بديل لو مفيش وش) ─────────
+def motion_track(src, st, ln, info, W, H):
+    """بيمشي مع أكتر منطقة فيها حركة أفقيًا. بيرجّع [(t, fx)] زي face_track أو None."""
+    try:
+        import numpy as np
+        w, h = info.get("w") or 0, info.get("h") or 0
+        if not w or not h or E is None:
+            return None
+        cw = min(1.0, (W / H) / (w / h))
+        if cw >= 0.98:
+            return None
+        sw = 96
+        sh = max(2, int(round(h * sw / w / 2)) * 2)
+        fps = 4.0
+        prev, cols = None, []
+        for g in E.gray_frames(src, st, ln, fps, sw, sh, max_seconds=90):
+            g = g.astype("float32")
+            cols.append(np.zeros(sw, dtype="float32") if prev is None else np.abs(g - prev).sum(axis=0))
+            prev = g
+        if len(cols) < 4:
+            return None
+        cols = np.array(cols)
+        k = 3
+        cs = np.cumsum(np.pad(cols, ((k, 0), (0, 0))), axis=0)
+        cols = (cs[k:] - cs[:-k]) / k
+        win = max(2, int(round(cw * sw)))
+        xs_c = (np.arange(sw) + 0.5) / sw
+        prior = 1.0 - 0.35 * np.abs(xs_c - 0.5) * 2          # ميل بسيط للنص
+        cols = cols * prior[None, :]
+        c2 = np.cumsum(np.pad(cols, ((0, 0), (1, 0))), axis=1)
+        sc = c2[:, win:] - c2[:, :-win]                         # مجموع الحركة لكل موضع نافذة
+        starts = sc.argmax(axis=1)
+        tot = cols.sum(axis=1)
+        ref = float(np.median(tot[tot > 0])) if (tot > 0).any() else 0.0
+        fx = (starts + win / 2.0) / sw
+        fx[tot < 0.25 * ref] = np.nan
+        ok = ~np.isnan(fx)
+        if fx.size < 2 or ok.sum() < max(2, int(0.15 * fx.size)):
+            return None
+        idx = np.arange(fx.size)
+        fx = np.interp(idx, idx[ok], fx[ok])
+        kk = 7
+        pad = np.pad(fx, (kk // 2, kk // 2), mode="edge")
+        fx = np.median(np.lib.stride_tricks.sliding_window_view(pad, kk), axis=1)
+        al, f_, b_ = 0.25, fx.copy(), fx.copy()
+        for i in range(1, fx.size):
+            f_[i] = al * fx[i] + (1 - al) * f_[i - 1]
+        for i in range(fx.size - 2, -1, -1):
+            b_[i] = al * fx[i] + (1 - al) * b_[i + 1]
+        fx = (f_ + b_) / 2.0
+        lo, hi = cw / 2.0, 1.0 - cw / 2.0
+        fx = np.clip(fx, lo, hi)
+        step = max(1, int(fx.size / 40))
+        sel = list(range(0, fx.size, step))
+        if sel[-1] != fx.size - 1:
+            sel.append(fx.size - 1)
+        return [(round(i / fps, 2), round(float(fx[i]), 4)) for i in sel]
+    except Exception as e:
+        say("تتبّع الحركة فشل: " + str(e)[:160])
+        return None
+
+
+# ───────── كشف الترجمة المطبوعة على الفيديو (OCR) ─────────
+def _ocr_words(png, langs, psm):
+    """كلمات واثقة من tesseract: [(top_px, height_px, نص)]."""
+    o = ffrun(["tesseract", png, "stdout", "-l", langs, "--psm", str(psm), "tsv"], timeout=90)
+    out = []
+    for ln in (o.stdout or "").splitlines()[1:]:
+        c = ln.split("\t")
+        if len(c) < 12:
+            continue
+        try:
+            conf, top, hgt = float(c[10]), float(c[7]), float(c[9])
+        except ValueError:
+            continue
+        txt = c[11].strip()
+        if conf < 60 or len(txt) < 2 or not any(ch.isalpha() for ch in txt):
+            continue
+        out.append((top, hgt, txt))
+    return out
+
+
+def _subtitle_line_top(words, band_h):
+    """بيجمّع الكلمات المتقاربة رأسيًا في سطور، وبيرجّع أعلى سطر شكله ترجمة (كلمتين+ و8 حروف+) أو None."""
+    best, grp = None, []
+    for top, hgt, txt in sorted(words):
+        if hgt < 0.05 * band_h or hgt > 0.5 * band_h:
+            continue
+        if grp and abs(top - grp[0][0]) > 0.5 * max(hgt, grp[0][1]):
+            if len(grp) >= 2 and sum(len(t) for _, _, t in grp) >= 8:
+                best = grp[0][0] if best is None else min(best, grp[0][0])
+            grp = []
+        grp.append((top, hgt, txt))
+    if len(grp) >= 2 and sum(len(t) for _, _, t in grp) >= 8:
+        best = grp[0][0] if best is None else min(best, grp[0][0])
+    return best
+
+
+def detect_burned_subs(src, dur, info):
+    """بيرجّع نسبة الارتفاع اللي نحتفظ بيها (0.6..0.95) لو لقى ترجمة مطبوعة تحت، أو None."""
+    if not shutil.which("tesseract") or not dur or not info.get("w") or not info.get("h"):
+        return None
+    langs = "eng"
+    try:
+        have = subprocess.run(["tesseract", "--list-langs"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True).stdout
+        if "ara" in have.split():
+            langs = "eng+ara"
+    except Exception:
+        pass
+    band0 = 0.55                      # بندوّر في أسفل 45% من الصورة
+    n, hits, tops = 7, 0, []
+    raw, thr = os.path.join(WORK, "ocr_raw.png"), os.path.join(WORK, "ocr_thr.png")
+    for i in range(n):
+        t = dur * (0.08 + 0.84 * i / (n - 1))
+        found = None
+        for path, vf, psm in ((thr, f"crop=iw:ih*{1 - band0:.2f}:0:ih*{band0:.2f},scale=1280:-2,format=gray,lutyuv=y='if(gt(val,205),0,255)'", 6),
+                              (raw, f"crop=iw:ih*{1 - band0:.2f}:0:ih*{band0:.2f},scale=1280:-2", 11)):
+            try:
+                r = ffrun(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{t:.2f}", "-i", src, "-frames:v", "1",
+                           "-vf", vf, "-update", "1", path], timeout=120)
+                if r.returncode != 0 or not os.path.exists(path):
+                    continue
+                words = _ocr_words(path, langs, psm)
+                bh = 1280.0 * (info["h"] * (1 - band0)) / info["w"]
+                top = _subtitle_line_top(words, bh)
+                if top is not None:
+                    g = band0 + (1 - band0) * top / bh
+                    found = g if found is None else min(found, g)
+            except Exception:
+                continue
+        if found is not None:
+            hits += 1
+            tops.append(found)
+    for p in (raw, thr):
+        try:
+            os.remove(p)
+        except Exception:
+            pass
+    if hits >= 3 and tops and (max(tops) - min(tops)) <= 0.10:
+        return round(max(0.6, min(0.95, min(tops) - 0.03)), 3)
+    return None
 
 
 # ───────── الموسيقى ─────────
@@ -230,16 +434,19 @@ def render_reel(src, info, win, idx, cfg, W, H, rep, base_pct, span):
         except Exception as e:
             rep.warn("تثبيت الصورة فشل وتخطيته.")
             say(str(e))
-    # 2) تتبّع الوش (اختياري)
+    # 2) تتبّع الهدف: وش لو متاح، وإلا أكتر منطقة حركة (اختياري)
     track_expr = None
     if cfg["track"]:
-        step(f"ريل {idx}: تتبّع الوش", 0.12)
+        step(f"ريل {idx}: تتبّع الهدف", 0.12)
         try:
+            tr = None
             if E and E.faces_available():
                 tr = E.face_track(src, st, ln, info, W, H)
-                track_expr = E.crop_x_expr(tr) if tr else None
-            if not track_expr:
-                rep.warn("التتبّع مالقاش وش واضح، اتقصّ من النص.")
+            if not tr:
+                tr = motion_track(src, st, ln, info, W, H)
+            track_expr = E.crop_x_expr(tr) if (tr and E) else None
+            if not track_expr and (info.get("w") or 0) / max(1, (info.get("h") or 1)) > W / H * 1.02:
+                rep.warn("التتبّع مالقاش هدف واضح، اتقصّ من النص.")
         except Exception as e:
             rep.warn("التتبّع فشل، اتقصّ من النص.")
             say(str(e))
@@ -247,7 +454,7 @@ def render_reel(src, info, win, idx, cfg, W, H, rep, base_pct, span):
     step(f"ريل {idx}: تجهيز الصورة والصوت", 0.2)
     a = os.path.join(tmp, "a.mp4")
     for attempt in (0, 1):
-        vf = C.video_chain(cfg, sw, sh, W, H, track_expr if attempt == 0 else None, stab if attempt == 0 else None, speed)
+        vf = C.video_chain(cfg, sw, sh, W, H, track_expr if attempt == 0 else None, stab if attempt == 0 else None, speed, info.get("sub_keep"))
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{st}", "-t", f"{ln}", "-i", src]
         if info.get("has_audio"):
             cmd += ["-filter_complex", vf, "-map", "[vout]", "-map", "0:a:0", "-af", C.audio_chain(cfg, speed)]
@@ -295,26 +502,31 @@ def render_reel(src, info, win, idx, cfg, W, H, rep, base_pct, span):
     if cfg["cap"]:
         tr = transcribe(cur, cfg["cap_lang"])
         if not tr:
-            rep.warn("الترجمة التلقائية مش متاحة دلوقتي، الريل طلع من غيرها.")
+            rep.warn("الترجمة التلقائية ماشتغلتش: " + (_WHISPER["err"] or "السبب غير معروف") + ". الريل طلع من غيرها.")
         else:
             words, segs, lang = tr
-            use_tr = cfg["cap_tr"] != "none" and bool(lang) and lang != cfg["cap_tr"]
-            if use_tr:
-                ts = translate_segments(segs, cfg["cap_tr"])
-                if ts:
-                    cs, _ = C.caption_events([], cfg, W, H, dur)
-                    styles += cs
-                    events += [(a_, b_, "Cap", C.ass_escape(t_), int(H * 0.16)) for a_, b_, t_ in ts if t_.strip()]
-                else:
-                    rep.warn("الترجمة مش متاحة دلوقتي، الكلام ظهر باللغة الأصلية.")
-                    use_tr = False
-            if not use_tr:
-                if words:
-                    cs, ce = C.caption_events(words, cfg, W, H, dur)
+            if not segs:
+                rep.warn("مفيش كلام واضح في الريل ده للتفريغ.")
+            else:
+                target = cfg["cap_tr"]
+                use_tr = target != "none" and bool(lang) and lang != target
+                done = False
+                if use_tr:
+                    outs = translate_texts([t_ for _, _, t_ in segs], target)
+                    if outs:
+                        cs, ce = C.segment_events([(a_, b_, o_) for (a_, b_, _), o_ in zip(segs, outs)], cfg, W, H, dur)
+                        styles += cs
+                        events += ce
+                        done = True
+                    else:
+                        rep.warn("الترجمة مش متاحة دلوقتي، الكلام ظهر باللغة الأصلية.")
+                if not done:
+                    if cfg["cap_style"] == "word" and words:
+                        cs, ce = C.caption_events(words, cfg, W, H, dur)
+                    else:
+                        cs, ce = C.segment_events(segs, cfg, W, H, dur)
                     styles += cs
                     events += ce
-                else:
-                    rep.warn("مفيش كلام واضح في الريل ده للتفريغ.")
     music = music_file(cfg, rep) if cfg["music"] else None
     final = os.path.join(tmp, "final.mp4")
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", cur]
@@ -423,6 +635,17 @@ def get_windows(cfg, src, info, rep):
             pts = silence_points(src, dur)
             if len(pts) < 2:
                 style = "len"
+    elif style == "auto":
+        n_, L_ = C.auto_params(dur, cfg)
+        if dur >= cfg["min"] and E:
+            try:
+                w = E.best_windows(src, dur, n_, L_, cfg["min"], cfg["max"], info, False, "all")
+                if not w:
+                    w = E.smart_windows(src, dur, n_, L_, cfg["min"], cfg["max"])
+                best = [(a, a + b) for a, b in (w or [])] or None
+            except Exception as e:
+                say("تحليل اللقطات: " + str(e)[:200])
+                best = None
     elif style == "best":
         try:
             L = int((cfg["min"] + cfg["max"]) / 2)
@@ -471,6 +694,8 @@ def run(cfgraw, rep):
                 d = 1e9
             durs.append(d)
         urls = [u for _, u in sorted(zip(durs, urls), key=lambda x: x[0])]
+    C.FONT = pick_font()
+    say("الخط المستخدم: " + C.FONT)
     W, H = C.dims(cfg["ratio"], cfg["res"], cfg["preview"])
     maxh = 480 if cfg["preview"] else (1080 if cfg["res"] == "1080" else 720)
     opts = {"referer": "", "cookie": "", "extra": "", "cookies_file": cookies, "maxh": maxh}
@@ -492,6 +717,16 @@ def run(cfgraw, rep):
         if not info or not info.get("dur"):
             rep.warn(f"الفيديو {ui + 1} مش صالح.")
             continue
+        if cfg["cap"] and cfg["desub"] and not cfg["preview"]:
+            rep.update(lo + span * 0.05, "بفحص لو الفيديو عليه ترجمة مطبوعة")
+            try:
+                keep = detect_burned_subs(src, info["dur"], info)
+            except Exception as e:
+                keep = None
+                say("كشف الترجمة المطبوعة فشل: " + str(e)[:140])
+            if keep:
+                info = dict(info, sub_keep=keep)
+                rep.warn("ℹ️ لقيت ترجمة مطبوعة على الفيديو وشلتها (الصورة اتكبّرت شوية).")
         wins = get_windows(cfg, src, info, rep)
         if cfg["preview"]:
             wins = [(0.0, min(8.0, info["dur"]), "")] if not wins else [(wins[0][0], min(wins[0][1], wins[0][0] + 8.0), wins[0][2])]

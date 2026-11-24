@@ -5,18 +5,18 @@ import json, math, os, re, subprocess
 # ───────── الإعدادات الافتراضية (الوضع البسيط هو الأصل: كل خاصية مقفولة لحد ما تفتحها) ─────────
 DEFAULT = {
     "url": "", "project": "", "preview": False, "saver": False, "shortest": True,
-    "cut": "len", "n": 5, "min": 15, "max": 25, "len": 20, "parts": 4, "overlap": 0,
-    "ratio": "9:16", "res": "1080", "fill": "auto", "track": False, "stab": False,
+    "cut": "auto", "n": 5, "min": 15, "max": 25, "len": 20, "parts": 4, "overlap": 0,
+    "ratio": "9:16", "res": "1080", "fill": "crop", "track": True, "stab": False,
     "clean": False, "norm": False, "nosil": False,
     "music": False, "mstyle": "calm", "murl": "", "mvol": 8, "duck": True,
     "look": "none", "speed": 1.0, "rev": False,
     "text": "", "text_on": False, "text_style": "plain",
-    "cap": False, "cap_style": "plain", "cap_lang": "auto", "cap_tr": "none",
+    "cap": False, "cap_style": "plain", "cap_lang": "auto", "cap_tr": "ar", "desub": True,
     "wm": False, "wm_text": "", "wm_style": "plain",
     "intro": False, "intro_text": "", "intro_style": "plain", "intro_sec": 2,
     "outro": False, "outro_text": "", "outro_style": "plain", "outro_sec": 2,
 }
-CUTS = ("len", "scene", "sentence", "silence", "best", "series", "equal")
+CUTS = ("auto", "len", "scene", "sentence", "silence", "best", "series", "equal")
 RATIOS = ("9:16", "4:5", "1:1", "16:9")
 FILLS = ("auto", "blur", "crop", "bars")
 LOOKS = {
@@ -69,9 +69,9 @@ def normalize(raw):
     c["url"] = str(r.get("url", "") or "").strip()
     c["project"] = str(r.get("project", "") or "").strip()[:40]
     for k in ("preview", "saver", "shortest", "track", "stab", "clean", "norm", "nosil", "music", "duck", "rev",
-              "text_on", "cap", "wm", "intro", "outro"):
+              "text_on", "cap", "desub", "wm", "intro", "outro"):
         c[k] = _b(r.get(k, DEFAULT[k]))
-    c["cut"] = _pick(r.get("cut"), CUTS, "len")
+    c["cut"] = _pick(r.get("cut"), CUTS, "auto")
     c["n"] = _i(r.get("n"), 5, 1, 30)
     c["min"] = _i(r.get("min"), 15, 3, 180)
     c["max"] = _i(r.get("max"), 25, 3, 180)
@@ -80,7 +80,7 @@ def normalize(raw):
     c["overlap"] = _i(r.get("overlap"), 0, 0, 5)
     c["ratio"] = _pick(r.get("ratio"), RATIOS, "9:16")
     c["res"] = "720" if str(r.get("res", "1080")) == "720" else "1080"
-    c["fill"] = _pick(r.get("fill"), FILLS, "auto")
+    c["fill"] = _pick(r.get("fill"), FILLS, "crop")
     c["mstyle"] = _pick(r.get("mstyle"), MSTYLES, "calm")
     c["murl"] = str(r.get("murl", "") or "").strip()
     c["mvol"] = _i(r.get("mvol"), 8, 2, 40)
@@ -90,7 +90,7 @@ def normalize(raw):
     c["text_style"] = _pick(r.get("text_style"), TEXT_STYLES, "plain")
     c["cap_style"] = _pick(r.get("cap_style"), CAP_STYLES, "plain")
     c["cap_lang"] = _pick(r.get("cap_lang"), ("auto", "ar", "en"), "auto")
-    c["cap_tr"] = _pick(r.get("cap_tr"), ("none", "ar", "en"), "none")
+    c["cap_tr"] = _pick(r.get("cap_tr"), ("none", "ar", "en"), "ar")
     c["wm_text"] = str(r.get("wm_text", "") or "")[:60]
     c["wm_style"] = _pick(r.get("wm_style"), WM_STYLES, "plain")
     for p in ("intro", "outro"):
@@ -121,7 +121,10 @@ def normalize(raw):
         c["overlap"] = 0
     if c["track"] and c["ratio"] == "16:9":
         c["track"] = False
-        notes.append("تتبّع الوش اتقفل: الشكل الأفقي مفيهوش قص جانبي.")
+        if "track" in r:
+            notes.append("التتبّع اتقفل: الشكل الأفقي مفيهوش قص جانبي.")
+    if c["max"] > 90:
+        notes.append("أطول ريل أكتر من 90 ثانية: بعض المنصات (زي ريلز إنستجرام القديمة) ممكن ما تقبلوش.")
     if c["track"] and c["fill"] in ("blur", "bars"):
         c["fill"] = "crop"
         notes.append("التتبّع محتاج قص يملا الشاشة، فخلّيت الملء «قص».")
@@ -129,10 +132,9 @@ def normalize(raw):
         c["n"] = 1
         c["saver"] = True
         c["res"] = "720"
-        for k in ("stab", "track"):
-            if c[k]:
-                c[k] = False
-                notes.append("المعاينة بتتخطى الثقيل (" + ("تثبيت الصورة" if k == "stab" else "تتبّع الوش") + ") عشان تخلص بسرعة.")
+        if c["stab"]:
+            c["stab"] = False
+            notes.append("المعاينة بتتخطى تثبيت الصورة عشان تخلص بسرعة.")
         if c["cut"] == "sentence" or c["cap"]:
             pass
     if c["saver"]:
@@ -168,6 +170,35 @@ def fit_cuts(points, dur, n, min_l, max_l):
     return wins
 
 
+def auto_params(dur, cfg):
+    """التلقائي: عدد الريلز المطلوب يتوزّع على الفيديو كله؛ طول الريل = المدة ÷ العدد بين أقل وأقصى مدة.
+    لو الفيديو أقصر من أقل مدة: ريل واحد بطول الفيديو كله."""
+    mn, mx, n_req = cfg["min"], cfg["max"], cfg["n"]
+    if dur < mn:
+        return 1, max(1.0, float(dur))
+    L = max(mn, min(mx, dur / max(1, n_req)))
+    L = math.floor(L * 10) / 10
+    n = max(1, min(n_req, int(dur // L)))
+    return n, L
+
+
+def uniform_windows(dur, n, L):
+    return [(max(0.0, min(dur - L, (i + 0.5) * dur / n - L / 2)), L) for i in range(n)]
+
+
+def no_overlap(ws, dur):
+    """كل ريل من جزء مختلف: مفيش مقطع بيتكرر ولا بيتداخل مع اللي قبله."""
+    out, end = [], 0.0
+    for st, ln in sorted(ws):
+        st = max(st, end)
+        ln = min(ln, dur - st)
+        if ln < 3 and out:
+            continue
+        out.append((round(st, 2), round(max(ln, 0.5), 2)))
+        end = st + ln
+    return out
+
+
 def plan_windows(style, dur, cfg, points=None, best=None):
     """بيرجّع قايمة (بداية, نهاية, ملصق). `points` نقط القص لـ scene/sentence/silence، و`best` نوافذ جاهزة لأفضل اللحظات."""
     n, mn, mx, L = cfg["n"], cfg["min"], cfg["max"], cfg["len"]
@@ -181,6 +212,11 @@ def plan_windows(style, dur, cfg, points=None, best=None):
     elif style in ("scene", "sentence", "silence"):
         for a, b in fit_cuts(points or [], dur, n, mn, mx):
             ws.append((a, b, ""))
+    elif style == "auto":
+        n_, L_ = auto_params(dur, cfg)
+        base = [(a, a + b) for a, b in no_overlap([(a, b - a) for a, b in best], dur)] if best else \
+               [(a, a + b) for a, b in no_overlap(uniform_windows(dur, n_, L_), dur)]
+        ws = [(round(a, 2), round(b, 2), "") for a, b in base]
     elif style == "best":
         for a, b in (best or []):
             ws.append((round(a, 2), round(b, 2), ""))
@@ -215,9 +251,11 @@ Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackC
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 """
+FONT = "DejaVu Sans"   # بيتبدّل وقت التشغيل بأجمل خط عربي متاح (Tajawal/Almarai)
+
 # الألوان في ASS بصيغة &HAABBGGRR
 _ST = {
-    "plain": dict(fg="&H00FFFFFF", sec="&H0000D7FF", out="&H00000000", back="&H00000000", bs=1, ol=0, sh=0),
+    "plain": dict(fg="&H00FFFFFF", sec="&H0000D7FF", out="&H00101010", back="&H80000000", bs=1, ol=4, sh=2),
     "box": dict(fg="&H00FFFFFF", sec="&H0000D7FF", out="&HB4000000", back="&HB4000000", bs=3, ol=10, sh=0),
     "neon": dict(fg="&H00D4EA5E", sec="&H0000D7FF", out="&H004A2F08", back="&H00000000", bs=1, ol=4, sh=0),
     "gold": dict(fg="&H00151C1C", sec="&H00000000", out="&H0A15CAFA", back="&H0A15CAFA", bs=3, ol=12, sh=0),
@@ -236,7 +274,8 @@ def ass_escape(s):
     return str(s).replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", "\\N")
 
 
-def style_line(name, style, w, size, align=2, marginv=0, font="DejaVu Sans"):
+def style_line(name, style, w, size, align=2, marginv=0, font=None):
+    font = font or FONT
     s = _ST.get(style, _ST["plain"])
     return (f"Style: {name},{font},{size},{s['fg']},{s['sec']},{s['out']},{s['back']},-1,0,0,0,100,100,0,0,"
             f"{s['bs']},{s['ol']},{s['sh']},{align},{int(w * 0.06)},{int(w * 0.06)},{marginv},1")
@@ -261,8 +300,8 @@ def overlay_events(cfg, w, h, dur, label=""):
             pieces.append(ass_escape(main_txt))
         if label:
             pieces.append(ass_escape("الجزء " + label))
-        styles.append(style_line("Txt", cfg["text_style"], w, size, align=8, marginv=int(h * 0.07)))
-        ev.append((0, dur, "Txt", "\\N".join(pieces), int(h * 0.07)))
+        styles.append(style_line("Txt", cfg["text_style"], w, size, align=8, marginv=int(h * 0.11)))
+        ev.append((0, dur, "Txt", "\\N".join(pieces), int(h * 0.11)))
     if cfg["wm"] and cfg["wm_text"].strip():
         wsz = int(w * 0.035)
         styles.append(style_line("Wm", "plain", w, wsz, align=7, marginv=0))
@@ -284,13 +323,51 @@ def overlay_events(cfg, w, h, dur, label=""):
     return styles, ev
 
 
+CAP_MV = 0.24   # الهامش السفلي كنسبة من الارتفاع (فوق أزرار المنصات)
+
+
+def chunk_lines(text, max_chars=26):
+    """بيقسّم النص لسطور قصيرة تناسب عرض الشاشة (من غير ما يقطع كلمة)."""
+    lines, cur = [], []
+    for wd in str(text).split():
+        if cur and len(" ".join(cur + [wd])) > max_chars:
+            lines.append(" ".join(cur))
+            cur = [wd]
+        else:
+            cur.append(wd)
+    if cur:
+        lines.append(" ".join(cur))
+    return lines
+
+
+def segment_events(segs, cfg, w, h, dur, max_chars=26):
+    """جمل مترجمة [(بداية, نهاية, نص)] → أحداث ASS: كل شاشة سطرين بحد أقصى، والوقت موزّع على قد طول النص."""
+    styles = [style_line("Cap", "plain" if cfg["cap_style"] == "word" else cfg["cap_style"], w, int(w * 0.064), align=2, marginv=int(h * CAP_MV))]
+    ev = []
+    mv = int(h * CAP_MV)
+    for a, b, t in segs:
+        lines = chunk_lines(t, max_chars)
+        if not lines:
+            continue
+        groups = ["\\N".join(ass_escape(x) for x in lines[i:i + 2]) for i in range(0, len(lines), 2)]
+        raw = ["".join(lines[i:i + 2]) for i in range(0, len(lines), 2)]
+        total = max(1, sum(len(x) for x in raw))
+        span = max(0.6, min(b, dur) - a)
+        t0 = a
+        for g, rw in zip(groups, raw):
+            d = span * len(rw) / total
+            ev.append((t0, min(dur, t0 + max(0.7, d)), "Cap", g, mv))
+            t0 += d
+    return styles, ev
+
+
 def caption_events(words, cfg, w, h, dur):
     """words: [(بداية, نهاية, كلمة)] → أحداث ASS. plain = جمل ثابتة، word = كلمة بكلمة مع تلوين الكلمة الحالية."""
     styles, ev = [], []
     style = cfg["cap_style"]
-    size = int(w * (0.07 if style == "word" else 0.055))
+    size = int(w * (0.07 if style == "word" else 0.064))
     base = "plain" if style in ("plain", "word") else style
-    styles.append(style_line("Cap", base, w, size, align=2, marginv=int(h * 0.16)))
+    styles.append(style_line("Cap", base, w, size, align=2, marginv=int(h * CAP_MV)))
     if not words:
         return styles, ev
     if style == "word":
@@ -303,7 +380,7 @@ def caption_events(words, cfg, w, h, dur):
                 for j, (_, _, ww) in enumerate(g):
                     t = ass_escape(ww)
                     parts.append(("{\\c&H0000D7FF&}" + t + "{\\c&HFFFFFF&}") if j == k else t)
-                ev.append((a, max(end, a + 0.1), "Cap", " ".join(parts), int(h * 0.16)))
+                ev.append((a, max(end, a + 0.1), "Cap", " ".join(parts), int(h * CAP_MV)))
     else:
         line, ls = [], None
         for a, b, wd in words:
@@ -311,10 +388,10 @@ def caption_events(words, cfg, w, h, dur):
                 ls = a
             line.append(ass_escape(wd))
             if len(line) >= 6 or wd.rstrip().endswith((".", "!", "?", "؟", "،", ",")):
-                ev.append((ls, min(dur, b + 0.15), "Cap", " ".join(line), int(h * 0.16)))
+                ev.append((ls, min(dur, b + 0.15), "Cap", " ".join(line), int(h * CAP_MV)))
                 line, ls = [], None
         if line:
-            ev.append((ls, min(dur, words[-1][1] + 0.3), "Cap", " ".join(line), int(h * 0.16)))
+            ev.append((ls, min(dur, words[-1][1] + 0.3), "Cap", " ".join(line), int(h * CAP_MV)))
     return styles, ev
 
 
@@ -336,20 +413,25 @@ def esc_path(p):
     return p.replace("\\", "/").replace(":", "\\:").replace("'", "\\'").replace(",", "\\,")
 
 
-def video_chain(cfg, src_w, src_h, W, H, track_expr=None, stab_file=None, speed=1.0):
+def video_chain(cfg, src_w, src_h, W, H, track_expr=None, stab_file=None, speed=1.0, keep=None):
     """سلسلة فلاتر الصورة: تثبيت → ملء الشاشة (+تتبّع) → مرآة → ألوان → سرعة. بترجّع نص filter_complex بين [0:v] و [vout]."""
     parts = []
     cur = "[0:v]"
     if stab_file:
         parts.append(f"{cur}vidstabtransform=input='{esc_path(stab_file)}':smoothing=15,unsharp=5:5:0.8:3:3:0.4[s]")
         cur = "[s]"
+    if keep and 0.5 < keep < 0.99:
+        # قص الجزء السفلي اللي فيه ترجمة مطبوعة (الصورة بتتكبّر شوية بدل ما نسيب الترجمة القديمة)
+        parts.append(f"{cur}crop=iw:trunc(ih*{keep:.3f}/2)*2:0:0[kc]")
+        cur = "[kc]"
+        src_h = (src_h or H) * keep
     fill = cfg["fill"]
     sa = (src_w or W) / (src_h or H)
     ta = W / H
     if fill == "auto":
         fill = "crop" if 0.8 <= sa / ta <= 1.25 else "blur"
     if fill == "crop":
-        if track_expr:
+        if track_expr and sa >= ta:
             parts.append(f"{cur}scale=-2:{H},crop={W}:{H}:x='{track_expr.replace('ow', str(W))}':y=0,setsar=1[f]")
         else:
             parts.append(f"{cur}scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},setsar=1[f]")
