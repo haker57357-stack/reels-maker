@@ -7,12 +7,13 @@ android {
         applicationId 'com.reelsmaker.app'
         minSdk 23
         targetSdk 34
-        versionCode 11
-        versionName '7.0'
+        versionCode 12
+        versionName '8.0'
         // بتتحقن وقت البناء على GitHub من الـ Secret (مش متكتوبة في الكود)
         buildConfigField "String", "APP_TOKEN", "\"${project.findProperty('appToken') ?: ''}\""
         buildConfigField "String", "TT_PUB", "\"${project.findProperty('ttPub') ?: ''}\""
         buildConfigField "String", "APP_REPO", "\"${project.findProperty('appRepo') ?: ''}\""
+        buildConfigField "String", "RUN_ID", "\"${project.findProperty('runId') ?: ''}\""
     }
     buildFeatures { buildConfig true }
     // مفتاح توقيع ثابت: عشان التحديث يتثبت فوق النسخة القديمة من غير ما يطلب حذفها

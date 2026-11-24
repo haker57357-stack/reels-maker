@@ -1,0 +1,92 @@
+name: ✨ ميديا برو (سحابي)
+run-name: pro ${{ inputs.job }}
+
+# معالجة «ميديا برو» على سيرفر GitHub المجاني. مستقل تمامًا عن workflow الريلز القديم.
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "رقم العملية (بيتملي من التطبيق)"
+        required: true
+      cfg:
+        description: "الإعدادات (JSON بيملاه التطبيق)"
+        required: true
+        default: "{}"
+
+permissions:
+  contents: write
+
+jobs:
+  make:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: تجهيز الإعدادات
+        id: cfg
+        env:
+          IN_CFG: ${{ inputs.cfg }}
+        run: |
+          printf '%s' "$IN_CFG" > pro_cfg.json
+          python3 - <<'PY'
+          import json, os
+          c = json.load(open("pro_cfg.json", encoding="utf-8"))
+          o = os.environ["GITHUB_OUTPUT"]
+          with open(o, "a") as f:
+              f.write("cap=%s\n" % str(bool(c.get("cap") or c.get("cut") == "sentence")).lower())
+              f.write("track=%s\n" % str(bool(c.get("track"))).lower())
+              f.write("tr=%s\n" % str(bool(c.get("cap") and c.get("cap_tr", "none") != "none")).lower())
+          PY
+
+      - name: تجهيز الأدوات (FFmpeg + الخطوط)
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! dpkg -s libraqm0 >/dev/null 2>&1; then
+            sudo apt-get update -y -qq && sudo apt-get install -y -qq ffmpeg libraqm0 fonts-dejavu-core
+          fi
+          python -m pip install -q --disable-pip-version-check --prefer-binary "yt-dlp[default,curl-cffi]" requests six fonttools arabic-reshaper "python-bidi==0.4.2" pillow numpy
+          if [ "${{ steps.cfg.outputs.track }}" = "true" ]; then
+            python -m pip install -q --disable-pip-version-check --prefer-binary opencv-python-headless || echo "::warning::OpenCV ماتثبّتش — التتبّع هيتعطّل"
+          fi
+          if [ "${{ steps.cfg.outputs.cap }}" = "true" ]; then
+            python -m pip install -q --disable-pip-version-check --prefer-binary faster-whisper || echo "::warning::faster-whisper ماتثبّتش — الترجمة هتتعطّل"
+          fi
+          if [ "${{ steps.cfg.outputs.tr }}" = "true" ]; then
+            python -m pip install -q --disable-pip-version-check --prefer-binary deep-translator || echo "::warning::deep-translator ماتثبّتش"
+          fi
+
+      - name: صنع الريلز (ميديا برو)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          IN_JOB: ${{ inputs.job }}
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+          REELS_HEADLESS: "1"
+        run: python3 pro/pro_engine.py --cfg pro_cfg.json
+
+      - name: تسجيل الفشل (لو السكريبت وقع قبل ما يبلّغ)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB: ${{ inputs.job }}
+        run: |
+          [[ "$JOB" =~ ^[a-z0-9]{6,32}$ ]] || exit 0
+          note='{"v":1,"stage":"fail","pct":0,"msg":"السيرفر وقع قبل ما يبدأ. جرّب تاني أو افتح صفحة الفحص.","files":[],"warn":[],"mins":0}'
+          if gh release view "pro-$JOB" >/dev/null 2>&1; then
+            cur=$(gh release view "pro-$JOB" --json body --jq .body)
+            if ! grep -q '"stage": "fail"\|"stage": "done"' <<< "$cur"; then gh release edit "pro-$JOB" --notes "$note" || true; fi
+          else
+            gh release create "pro-$JOB" --title "pro" --notes "$note" || true
+          fi
+
+      - name: تنظيف الإصدارات القديمة (بنسيب آخر 40)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | grep '^pro-' | tail -n +41 | \
+            while read -r t; do gh release delete "$t" --cleanup-tag -y || true; done

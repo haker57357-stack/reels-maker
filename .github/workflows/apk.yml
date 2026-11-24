@@ -26,14 +26,16 @@ jobs:
           ORG_GRADLE_PROJECT_appToken: ${{ secrets.APP_TOKEN }}
           ORG_GRADLE_PROJECT_appRepo: ${{ github.repository }}
           ORG_GRADLE_PROJECT_ttPub: ${{ vars.TT_PUB }}
+          ORG_GRADLE_PROJECT_runId: ${{ github.run_id }}
         run: |
           [ -n "$ORG_GRADLE_PROJECT_appToken" ] || { echo "::error::الـ Secret اسمه APP_TOKEN مش متضاف"; exit 1; }
           gradle -p android assembleDebug --no-daemon
       - name: نشر الـ APK
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           cp android/app/build/outputs/apk/debug/app-debug.apk ReelsMaker.apk
           gh release delete apk-latest --cleanup-tag -y || true
           gh release create apk-latest ReelsMaker.apk --title "📱 تطبيق صانع الريلز" \
-            --notes "نزّل ReelsMaker.apk وثبّته."
+            --notes "نزّل ReelsMaker.apk وثبّته. run:$RUN_ID"

@@ -309,6 +309,24 @@ public class MainActivity extends Activity {
         studio.setOnClickListener(v -> startActivity(new Intent(this, StudioActivity.class)));
         root.addView(studio, rowLp(-2, 8));
 
+        // ───── ميديا برو (قسم جديد) ─────
+        LinearLayout proTile = new LinearLayout(this);
+        proTile.setGravity(Gravity.CENTER_VERTICAL);
+        proTile.setPadding(dp(12), dp(8), dp(12), dp(8));
+        GradientDrawable pg = new GradientDrawable(GradientDrawable.Orientation.RIGHT_LEFT, new int[]{0xFFB5683A, 0xFFE8A06A});
+        pg.setCornerRadius(dp(16));
+        proTile.setBackground(pg);
+        proTile.addView(Ui.iconChip(this, "✨", 38, Color.WHITE));
+        LinearLayout pCol = new LinearLayout(this);
+        pCol.setOrientation(LinearLayout.VERTICAL);
+        pCol.setPadding(dp(10), 0, dp(6), 0);
+        pCol.addView(Ui.text(this, "ميديا برو", 15, Color.WHITE, true));
+        pCol.addView(Ui.text(this, "قص ذكي • ترجمة • حسابات ونشر بضغطة", 10.5f, 0xFFFFF1E4, false));
+        proTile.addView(pCol, new LinearLayout.LayoutParams(0, -2, 1f));
+        proTile.addView(Ui.text(this, "‹", 24, Color.WHITE, true));
+        proTile.setOnClickListener(v -> startActivity(new Intent(this, ProActivity.class)));
+        root.addView(proTile, rowLp(-2, 8));
+
         LinearLayout pubRow = new LinearLayout(this);
         ttSt = platTile(pubRow, "🎵", "تيك توك", TikTokActivity.class);
         fbSt = platTile(pubRow, "📘", "فيسبوك", FbActivity.class);

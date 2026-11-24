@@ -6,3 +6,5 @@ settings.json
 cookies.txt
 server.log
 __pycache__/
+pro_out/
+pro_work/
